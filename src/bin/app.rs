@@ -1,3 +1,3 @@
 fn main() {
-    yew::Renderer::<wasm::app::App>::new().render();
+    yew::Renderer::<stardew_seed_cracker::app::App>::new().render();
 }
