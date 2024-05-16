@@ -6,9 +6,15 @@ use std::collections::HashSet;
 use crate::codegen::{
     ObjectInformation, FAST_EXCLUDE, FIRST_FILTER, OBJECT_INFORMATION, SECOND_FILTER,
 };
-use crate::prng::Prng;
+use crate::prng::{get_prng, Prng};
 
 pub const STOCK_QUANTITY: usize = 10usize;
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub enum Platform {
+    PC,
+    Switch,
+}
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct Item {
@@ -19,12 +25,13 @@ pub struct Item {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct TravelingMerchant {
+    pub platform: Platform,
     pub stock: [Item; STOCK_QUANTITY],
 }
 
 impl TravelingMerchant {
-    pub fn seed_valid<R: Prng>(&self, seed: i32) -> Result<bool> {
-        let mut prng: R = R::from_seed(seed)?;
+    pub fn seed_valid(&self, seed: i32) -> Result<bool> {
+        let mut prng: Box<dyn Prng> = get_prng(self.platform, seed)?;
 
         let mut used_indexes: HashSet<u16> = HashSet::new();
 
@@ -53,16 +60,31 @@ impl TravelingMerchant {
                     continue;
                 }
 
-                // Switch edition moves these before the checks.
-                let constant_multiplier: u16 = prng.gen_range(1i32..11i32)? as u16;
-                let variable_multiplier: u16 = prng.gen_range(3i32..6i32)? as u16;
-                let quantity_decider: f64 = prng.gen_float()?;
+                let constant_multiplier: u16;
+                let variable_multiplier: u16;
+                let quantity_decider: f64;
+                match self.platform {
+                    Platform::PC => {
+                        if SECOND_FILTER.contains(&index) {
+                            continue;
+                        }
 
-                if SECOND_FILTER.contains(&index) {
-                    continue;
+                        constant_multiplier = prng.gen_range(1i32..11i32)? as u16;
+                        variable_multiplier = prng.gen_range(3i32..6i32)? as u16;
+                        quantity_decider = prng.gen_float()?;
+                    }
+                    Platform::Switch => {
+                        // Switch edition moves these before the checks.
+                        constant_multiplier = prng.gen_range(1i32..11i32)? as u16;
+                        variable_multiplier = prng.gen_range(3i32..6i32)? as u16;
+                        quantity_decider = prng.gen_float()?;
+
+                        if SECOND_FILTER.contains(&index) {
+                            continue;
+                        }
+                    }
                 }
 
-                // Switch edition also prevents duplicates.
                 if !used_indexes.insert(index) {
                     continue;
                 }

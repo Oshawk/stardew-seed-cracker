@@ -97,7 +97,7 @@ impl Component for DateComponent {
                     <div class="control is-expanded">
                         <div class="dropdown-trigger">
                             <button class="button is-fullwidth is-justify-content-space-between" onfocus={ ctx.link().callback(|_| Self::Message::SeasonFocus(true)) } onblur={ ctx.link().callback(|_| Self::Message::SeasonFocus(false)) }>
-                                <span>{ match self.season_value { Some(value) => match value { 1u8 => "Spring".to_string(), 2u8 => "Summer".to_string(), 3 => "Fall".to_string(), 4 => "Winter".to_string(), _ => "ERROR".to_string() }, None => "Season".to_string() } }</span>
+                                <span>{ match self.season_value { Some(value) => match value { 1u8 => "Spring".to_string(), 2u8 => "Summer".to_string(), 3u8 => "Fall".to_string(), 4u8 => "Winter".to_string(), _ => "ERROR".to_string() }, None => "Season".to_string() } }</span>
                                 <span class="material-symbols-outlined">{ "expand_more" }</span>
                             </button>
                         </div>

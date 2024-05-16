@@ -9,7 +9,8 @@ use crate::agent::{Agent, AgentInput, AgentOutput, AgentStart, PROGRESS_INCREMEN
 
 use crate::date_component::DateComponent;
 use crate::item_component::ItemComponent;
-use crate::traveling_merchant::{Item, TravelingMerchant, STOCK_QUANTITY};
+use crate::platform_component::PlatformComponent;
+use crate::traveling_merchant::{Item, Platform, TravelingMerchant, STOCK_QUANTITY};
 
 enum SeedStatus {
     NotRun,
@@ -18,15 +19,17 @@ enum SeedStatus {
 }
 
 pub enum Message {
-    ItemUpdate(usize, Option<Item>),
+    PlatformUpdate(Option<Platform>),
     DateUpdate(Option<i32>),
+    ItemUpdate(usize, Option<Item>),
     Run,
     AgentOutput(u8, AgentOutput),
 }
 
 pub struct App {
-    stock: [Option<Item>; STOCK_QUANTITY],
+    platform: Option<Platform>,
     date: Option<i32>,
+    stock: [Option<Item>; STOCK_QUANTITY],
     workers: Vec<Box<dyn Bridge<Agent>>>,
     running: u8,
     progress: u64,
@@ -57,8 +60,9 @@ impl Component for App {
         }
 
         Self {
-            stock: [None; 10usize],
+            platform: None,
             date: None,
+            stock: [None; 10usize],
             workers,
             running: 0u8,
             progress: 0u64,
@@ -68,14 +72,19 @@ impl Component for App {
 
     fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
-            Message::ItemUpdate(index, item) => {
+            Message::PlatformUpdate(platform) => {
                 let last_run_enabled: bool = self.run_enabled();
-                self.stock[index] = item;
+                self.platform = platform;
                 last_run_enabled != self.run_enabled()
             }
             Message::DateUpdate(date) => {
                 let last_run_enabled: bool = self.run_enabled();
                 self.date = date;
+                last_run_enabled != self.run_enabled()
+            }
+            Message::ItemUpdate(index, item) => {
+                let last_run_enabled: bool = self.run_enabled();
+                self.stock[index] = item;
                 last_run_enabled != self.run_enabled()
             }
             Message::Run => {
@@ -84,6 +93,7 @@ impl Component for App {
                 }
 
                 let merchant: TravelingMerchant = TravelingMerchant {
+                    platform: self.platform.unwrap(),
                     stock: [
                         self.stock[0].unwrap(),
                         self.stock[1].unwrap(),
@@ -104,8 +114,8 @@ impl Component for App {
                     worker.send(AgentInput::Start(AgentStart {
                         start: index as u32,
                         add,
-                        merchant: merchant.clone(),
                         date: self.date.unwrap(),
+                        merchant: merchant.clone(),
                     }));
                     self.running += 1u8;
                 }
@@ -164,8 +174,16 @@ impl Component for App {
         html! {
             <section class="section">
                 <h1 class="title has-text-centered">{ "Stardew Valley Switch Seed Finder" }</h1>
-                <h2 class="subtitle has-text-centered">{ "Enter the first 10 items from the travelling merchant (order matters) and the date." }</h2>
+                <h2 class="subtitle has-text-centered">{ "Enter the platform, date and first 10 items from the travelling merchant (order matters)." }</h2>
                 <div class="container">
+                    <div class="columns">
+                        <div class="column">
+                            <PlatformComponent callback={ ctx.link().callback(|date| Self::Message::PlatformUpdate(date)) }/>
+                        </div>
+                        <div class="column">
+                            <DateComponent callback={ ctx.link().callback(|date| Self::Message::DateUpdate(date)) }/>
+                        </div>
+                    </div>
                     {
                         (0usize..STOCK_QUANTITY).into_iter().map(|index| {
                             html!(
@@ -173,7 +191,6 @@ impl Component for App {
                             )
                         }).collect::<Html>()
                     }
-                    <DateComponent callback={ ctx.link().callback(|date| Self::Message::DateUpdate(date)) }/>
                     <button class="button is-primary is-fullwidth mb-3" disabled={ !self.run_enabled() } onclick={ ctx.link().callback(|_| Self::Message::Run) }>{ "Go" }</button>
                     <progress class="progress is-primary" value={ self.progress.to_string() } max={ PROGRESS_MAX.to_string() }>{ format!("{}/{}", self.progress, PROGRESS_MAX) }</progress>
                     {
@@ -202,6 +219,9 @@ impl Component for App {
 
 impl App {
     fn run_enabled(&self) -> bool {
-        !self.stock.iter().any(|item| item.is_none()) && self.date.is_some() && self.running == 0u8
+        self.platform.is_some()
+            && self.date.is_some()
+            && !self.stock.iter().any(|item| item.is_none())
+            && self.running == 0u8
     }
 }

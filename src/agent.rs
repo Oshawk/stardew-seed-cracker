@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use yew_agent::{HandlerId, Private, Worker, WorkerLink};
 
-use crate::prng::Jkiss;
 use crate::traveling_merchant::TravelingMerchant;
 
 pub const PROGRESS_INCREMENT: u64 = 2u64.pow(24u32);
@@ -11,8 +10,8 @@ pub const PROGRESS_MAX: u64 = u32::MAX as u64 + 1u64;
 pub struct AgentStart {
     pub start: u32,
     pub add: u32,
-    pub merchant: TravelingMerchant,
     pub date: i32,
+    pub merchant: TravelingMerchant,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -61,7 +60,7 @@ impl Worker for Agent {
                     .step_by(start.add as usize)
                     .take(PROGRESS_INCREMENT as usize)
                 {
-                    match start.merchant.seed_valid::<Jkiss>(seed as i32) {
+                    match start.merchant.seed_valid(seed as i32) {
                         Ok(seed_valid) => {
                             if seed_valid {
                                 self.link
