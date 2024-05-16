@@ -64,7 +64,8 @@ impl Worker for Agent {
                     match start.merchant.seed_valid::<Jkiss>(seed as i32) {
                         Ok(seed_valid) => {
                             if seed_valid {
-                                self.link.respond(id, AgentOutput::SeedFound(seed as i32 - start.date));
+                                self.link
+                                    .respond(id, AgentOutput::SeedFound(seed as i32 - start.date));
                                 clear_start = true;
                                 break;
                             }

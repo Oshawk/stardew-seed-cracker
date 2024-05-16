@@ -117,7 +117,7 @@ impl Component for ItemComponent {
                     </div>
                     <div class="control is-expanded">
                         <div class="dropdown-trigger">
-                            <input class="input" type="text" placeholder="Item" value={ self.item_value.clone() } onfocus={ ctx.link().callback(|_| Self::Message::ItemFocus(true)) } onblur={ ctx.link().callback(|_| Self::Message::ItemFocus(false)) } oninput={ ctx.link().callback(|event: InputEvent| Self::Message::ItemValue(event.target_unchecked_into::<HtmlInputElement>().value())) }/>
+                            <input class="input" type="text" placeholder="Item" value={ self.item_value.clone() } onfocus={ ctx.link().callback(|_| Self::Message::ItemFocus(true)) } onblur={ ctx.link().callback(|_| Self::Message::ItemFocus(false)) } oninput={ ctx.link().callback(|event: InputEvent| Self::Message::ItemValue(event.target_unchecked_into::<HtmlInputElement>().value())) } />
                         </div>
                     </div>
                     <div class="dropdown-menu" style="width:100%">
