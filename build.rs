@@ -26,7 +26,7 @@ fn main() {
     let out_path: PathBuf = Path::new(&env::var("OUT_DIR").unwrap()).join("codegen.rs");
     let mut out_file: BufWriter<File> = BufWriter::new(File::create(&out_path).unwrap());
 
-    let object_information_path: &Path = Path::new("ObjectInformation.json");
+    let object_information_path: &Path = Path::new("assets/ObjectInformation.json");
     let object_information_file: File = File::open(&object_information_path).unwrap();
     let object_information_json: serde_json::Value =
         serde_json::from_reader(object_information_file).unwrap();

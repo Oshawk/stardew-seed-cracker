@@ -174,7 +174,7 @@ impl Component for App {
         html! {
             <section class="section">
                 <h1 class="title has-text-centered">{ "Stardew Seed Cracker" }</h1>
-                <h2 class="subtitle has-text-centered">{ "Enter the platform, date and first 10 items from the travelling merchant (order matters)." }</h2>
+                <h2 class="subtitle has-text-centered">{ "Enter the platform, date and first 10 items from the travelling cart (order matters)." }</h2>
                 <div class="container">
                     <div class="columns">
                         <div class="column">

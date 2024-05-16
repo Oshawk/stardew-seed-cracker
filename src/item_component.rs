@@ -6,7 +6,7 @@ use crate::traveling_merchant::{possible_prices, Item};
 
 const ICON_SIZE: u16 = 16u16;
 const ICONS_PER_ROW: u16 = 24u16;
-const ICONS_FILE: &str = "springobjects.png";
+const ICONS_FILE: &str = "./assets/springobjects.png";
 
 macro_rules! icon_image {
     ($index:expr) => {
