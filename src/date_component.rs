@@ -90,6 +90,9 @@ impl Component for DateComponent {
     fn view(&self, ctx: &Context<Self>) -> Html {
         html! {
             <div class="field has-addons">
+                <div class="control" style="flex: 1">
+                    <input class="input" type="text" placeholder="Day" value={ match self.day_value { Some(day) => day.to_string(), None => "".to_string() } } oninput={ ctx.link().callback(|event: InputEvent| Self::Message::DayValue(event.target_unchecked_into::<HtmlInputElement>().value())) } />
+                </div>
                 <div class={ if self.season_focus { "dropdown is-active" } else { "dropdown" } } style="flex: 1">
                     <div class="control is-expanded">
                         <div class="dropdown-trigger">
@@ -107,9 +110,6 @@ impl Component for DateComponent {
                             <a class="dropdown-item" onmousedown={ ctx.link().callback(move |_| Self::Message::SeasonValue(4u8)) }>{ "Winter" }</a>
                         </div>
                     </div>
-                </div>
-                <div class="control" style="flex: 1">
-                    <input class="input" type="text" placeholder="Day" value={ match self.day_value { Some(day) => day.to_string(), None => "".to_string() } } oninput={ ctx.link().callback(|event: InputEvent| Self::Message::DayValue(event.target_unchecked_into::<HtmlInputElement>().value())) } />
                 </div>
                 <div class="control" style="flex: 1">
                     <input class="input" type="text" placeholder="Year" value={ match self.year_value { Some(year) => year.to_string(), None => "".to_string() } } oninput={ ctx.link().callback(|event: InputEvent| Self::Message::YearValue(event.target_unchecked_into::<HtmlInputElement>().value())) } />
