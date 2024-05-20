@@ -104,4 +104,8 @@ impl Worker for Agent {
     fn name_of_resource() -> &'static str {
         "agent.js"
     }
+
+    fn resource_path_is_relative() -> bool {
+        true
+    }
 }
