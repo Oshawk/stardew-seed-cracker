@@ -1,17 +1,26 @@
 use serde::{Deserialize, Serialize};
 use yew_agent::worker::{HandlerId, Worker, WorkerScope};
 
-use crate::traveling_merchant::TravelingMerchant;
+use crate::observation::{Observation, Platform};
+use crate::quest_checker::check_all;
 
-pub const PROGRESS_INCREMENT: u64 = 2u64.pow(20u32);
-pub const PROGRESS_MAX: u64 = u32::MAX as u64 + 1u64;
+/// 2012-06-22T00:00:00 UTC as a Unix timestamp (seconds since 1970-01-01).
+pub const STARDEW_EPOCH_UNIX: u64 = 1340323200;
+
+/// How many candidates to test per batch before yielding a progress update.
+pub const PROGRESS_INCREMENT: u64 = 1 << 20; // ~1M
 
 #[derive(Serialize, Deserialize)]
 pub struct AgentStart {
-    pub start: u32,
-    pub add: u32,
-    pub date: i32,
-    pub merchant: TravelingMerchant,
+    /// Starting candidate for this worker (= worker_index).
+    pub start: u64,
+    /// Stride (= total number of workers).
+    pub add: u64,
+    /// Exclusive upper bound: seconds since Stardew epoch, computed at crack time.
+    pub t_max: u64,
+    pub platform: Platform,
+    /// Observations sorted by pass_rate() ascending (most discriminating first).
+    pub observations: Vec<Observation>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -22,10 +31,13 @@ pub enum AgentInput {
 
 #[derive(Serialize, Deserialize)]
 pub enum AgentOutput {
-    Error(String),
-    SeedFound(i32),
-    SeedNotFound,
+    /// Candidates found in this batch (may be empty).
+    Candidates(Vec<u64>),
+    /// Batch done; more work remaining. App should send Continue.
     Progress,
+    /// Worker has exhausted its assigned range.
+    Done,
+    Error(String),
 }
 
 pub struct Agent {
@@ -49,38 +61,43 @@ impl Worker for Agent {
         }
 
         let mut clear_start = false;
+
         if let Some(start) = &mut self.start {
-            for seed in (start.start..=u32::MAX)
-                .step_by(start.add as usize)
-                .take(PROGRESS_INCREMENT as usize)
-            {
-                match start.merchant.seed_valid(seed as i32) {
-                    Ok(seed_valid) => {
-                        if seed_valid {
-                            scope.respond(id, AgentOutput::SeedFound(seed as i32 - start.date));
-                            clear_start = true;
-                            break;
-                        }
-                    }
-                    Err(error) => {
-                        scope.respond(id, AgentOutput::Error(error.to_string()));
-                        clear_start = true;
+            let mut found: Vec<u64> = Vec::new();
+            let end = start.t_max;
+            let mut overflow = false;
+
+            // Test up to PROGRESS_INCREMENT candidates starting at `start.start`,
+            // stepping by `start.add`.
+            let mut tested = 0u64;
+            let mut current = start.start;
+
+            while current <= end && tested < PROGRESS_INCREMENT {
+                if check_all(start.platform, current, &start.observations) {
+                    found.push(current);
+                }
+                // Advance by stride, check for overflow
+                match current.checked_add(start.add) {
+                    Some(next) => current = next,
+                    None => {
+                        // Overflow means we've wrapped past u64::MAX — range exhausted
+                        overflow = true;
                         break;
                     }
                 }
+                tested += 1;
             }
 
-            if !clear_start {
-                match start.start.checked_add(start.add * PROGRESS_INCREMENT as u32) {
-                    Some(result) => {
-                        start.start = result;
-                        scope.respond(id, AgentOutput::Progress);
-                    }
-                    None => {
-                        scope.respond(id, AgentOutput::SeedNotFound);
-                        clear_start = true;
-                    }
-                }
+            if overflow || current > end {
+                // Exhausted our range
+                scope.respond(id, AgentOutput::Candidates(found));
+                scope.respond(id, AgentOutput::Done);
+                clear_start = true;
+            } else {
+                // Batch done, more work remains
+                start.start = current;
+                scope.respond(id, AgentOutput::Candidates(found));
+                scope.respond(id, AgentOutput::Progress);
             }
         }
 

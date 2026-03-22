@@ -3,16 +3,24 @@ name = "stardew_seed_cracker"
 version = "0.1.0"
 edition = "2021"
 
+# Core logic — compiled on every target (including native test binaries).
 [dependencies]
 anyhow = "1.0"
 phf = "0.11"
-serde = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+
+# Native-only (dev tools, not compiled to WASM).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+clap = { version = "4", features = ["derive"] }
+
+# WASM/browser-only — never compiled for native targets.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
 web-sys = { version = "0.3", features = ["console", "Navigator", "Window"] }
 yew = { version = "0.23", features = ["csr"] }
 yew-agent = "0.5"
 
 [build-dependencies]
-phf = { version = "0.11", features = ["macros"] }
 phf_codegen = "0.11"
 serde_json = "1.0"
 

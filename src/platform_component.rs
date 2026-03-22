@@ -1,6 +1,6 @@
 use yew::prelude::*;
 
-use crate::traveling_merchant::Platform;
+use crate::observation::Platform;
 
 #[derive(Clone, PartialEq, Properties)]
 pub struct PlatformProperties {
