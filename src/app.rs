@@ -1,9 +1,9 @@
 use std::cmp::min;
-use std::rc::Rc;
 use web_sys::{console, window};
 use yew::html::Scope;
 use yew::prelude::*;
-use yew_agent::{Bridge, Bridged};
+use yew_agent::worker::WorkerBridge;
+use yew_agent::Spawnable;
 
 use crate::agent::{Agent, AgentInput, AgentOutput, AgentStart, PROGRESS_INCREMENT, PROGRESS_MAX};
 
@@ -30,7 +30,7 @@ pub struct App {
     platform: Option<Platform>,
     date: Option<i32>,
     stock: [Option<Item>; STOCK_QUANTITY],
-    workers: Vec<Box<dyn Bridge<Agent>>>,
+    workers: Vec<WorkerBridge<Agent>>,
     running: u8,
     progress: u64,
     seed_status: SeedStatus,
@@ -46,18 +46,16 @@ impl Component for App {
             None => 4u8,
         };
 
-        let mut workers: Vec<Box<dyn Bridge<Agent>>> = Vec::new();
-        for index in 0u8..worker_count {
-            let agent_callback = {
+        let workers: Vec<WorkerBridge<Agent>> = (0u8..worker_count)
+            .map(|index| {
                 let link: Scope<App> = ctx.link().clone();
-                move |output: AgentOutput| {
-                    link.send_message(Self::Message::AgentOutput(index, output))
-                }
-            };
-            let worker: Box<dyn Bridge<Agent>> = Agent::bridge(Rc::new(agent_callback));
-
-            workers.push(worker);
-        }
+                Agent::spawner()
+                    .callback(move |output: AgentOutput| {
+                        link.send_message(Message::AgentOutput(index, output))
+                    })
+                    .spawn("agent.js")
+            })
+            .collect();
 
         Self {
             platform: None,
@@ -73,17 +71,17 @@ impl Component for App {
     fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
             Message::PlatformUpdate(platform) => {
-                let last_run_enabled: bool = self.run_enabled();
+                let last_run_enabled = self.run_enabled();
                 self.platform = platform;
                 last_run_enabled != self.run_enabled()
             }
             Message::DateUpdate(date) => {
-                let last_run_enabled: bool = self.run_enabled();
+                let last_run_enabled = self.run_enabled();
                 self.date = date;
                 last_run_enabled != self.run_enabled()
             }
             Message::ItemUpdate(index, item) => {
-                let last_run_enabled: bool = self.run_enabled();
+                let last_run_enabled = self.run_enabled();
                 self.stock[index] = item;
                 last_run_enabled != self.run_enabled()
             }
@@ -92,7 +90,7 @@ impl Component for App {
                     return false;
                 }
 
-                let merchant: TravelingMerchant = TravelingMerchant {
+                let merchant = TravelingMerchant {
                     platform: self.platform.unwrap(),
                     stock: [
                         self.stock[0].unwrap(),
@@ -108,7 +106,7 @@ impl Component for App {
                     ],
                 };
 
-                let add: u32 = self.workers.len() as u32;
+                let add = self.workers.len() as u32;
 
                 for (index, worker) in self.workers.iter_mut().enumerate() {
                     worker.send(AgentInput::Start(AgentStart {
@@ -139,12 +137,9 @@ impl Component for App {
                 AgentOutput::SeedNotFound => {
                     self.running -= 1u8;
                     if self.running == 0u8 {
-                        match self.seed_status {
-                            SeedStatus::NotRun => {
-                                self.progress = PROGRESS_MAX;
-                                self.seed_status = SeedStatus::NotFound;
-                            }
-                            _ => {}
+                        if matches!(self.seed_status, SeedStatus::NotRun) {
+                            self.progress = PROGRESS_MAX;
+                            self.seed_status = SeedStatus::NotFound;
                         }
                         true
                     } else {
@@ -152,14 +147,14 @@ impl Component for App {
                     }
                 }
                 AgentOutput::Progress => {
-                    self.progress += PROGRESS_INCREMENT;
-                    self.progress = min(self.progress, PROGRESS_MAX);
+                    self.progress = min(self.progress + PROGRESS_INCREMENT, PROGRESS_MAX);
                     match self.seed_status {
-                        SeedStatus::NotRun => self
-                            .workers
-                            .get_mut(index as usize)
-                            .unwrap()
-                            .send(AgentInput::Continue),
+                        SeedStatus::NotRun => {
+                            self.workers
+                                .get_mut(index as usize)
+                                .unwrap()
+                                .send(AgentInput::Continue);
+                        }
                         _ => {
                             self.running -= 1u8;
                         }
@@ -178,37 +173,29 @@ impl Component for App {
                 <div class="container">
                     <div class="columns">
                         <div class="column">
-                            <PlatformComponent callback={ ctx.link().callback(|date| Self::Message::PlatformUpdate(date)) }/>
+                            <PlatformComponent callback={ ctx.link().callback(Message::PlatformUpdate) }/>
                         </div>
                         <div class="column">
-                            <DateComponent callback={ ctx.link().callback(|date| Self::Message::DateUpdate(date)) }/>
+                            <DateComponent callback={ ctx.link().callback(Message::DateUpdate) }/>
                         </div>
                     </div>
-                    {
-                        (0usize..STOCK_QUANTITY).into_iter().map(|index| {
-                            html!(
-                                <ItemComponent index={ index } callback={ ctx.link().callback(|(index, item)| Self::Message::ItemUpdate(index, item)) }/>
-                            )
-                        }).collect::<Html>()
-                    }
-                    <button class="button is-primary is-fullwidth mb-3" disabled={ !self.run_enabled() } onclick={ ctx.link().callback(|_| Self::Message::Run) }>{ "Go" }</button>
+                    { for (0..STOCK_QUANTITY).map(|index| html! {
+                        <ItemComponent index={ index } callback={ ctx.link().callback(|(index, item)| Message::ItemUpdate(index, item)) }/>
+                    }) }
+                    <button class="button is-primary is-fullwidth mb-3" disabled={ !self.run_enabled() } onclick={ ctx.link().callback(|_| Message::Run) }>{ "Go" }</button>
                     <progress class="progress is-primary" value={ self.progress.to_string() } max={ PROGRESS_MAX.to_string() }>{ format!("{}/{}", self.progress, PROGRESS_MAX) }</progress>
                     {
                         match self.seed_status {
-                            SeedStatus::NotRun => {
-                                html!()
-                            }
-                            SeedStatus::NotFound => {
-                                html!(<h1 class="title has-text-centered">{ "Seed Not Found" }</h1>)
-                            }
-                            SeedStatus::Found(seed) => {
-                                html!(
-                                    <>
-                                        <h1 class="title has-text-centered">{ "Seed Found" }</h1>
-                                        <h2 class="subtitle has-text-centered">{ format!("{}", seed) }</h2>
-                                    </>
-                                )
-                            }
+                            SeedStatus::NotRun => html!(),
+                            SeedStatus::NotFound => html! {
+                                <h1 class="title has-text-centered">{ "Seed Not Found" }</h1>
+                            },
+                            SeedStatus::Found(seed) => html! {
+                                <>
+                                    <h1 class="title has-text-centered">{ "Seed Found" }</h1>
+                                    <h2 class="subtitle has-text-centered">{ seed.to_string() }</h2>
+                                </>
+                            },
                         }
                     }
                 </div>
@@ -221,7 +208,7 @@ impl App {
     fn run_enabled(&self) -> bool {
         self.platform.is_some()
             && self.date.is_some()
-            && !self.stock.iter().any(|item| item.is_none())
+            && self.stock.iter().all(|item| item.is_some())
             && self.running == 0u8
     }
 }

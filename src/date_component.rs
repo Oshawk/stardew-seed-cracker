@@ -1,120 +1,143 @@
+use std::rc::Rc;
 use web_sys::HtmlInputElement;
 use yew::prelude::*;
-
-pub enum DateMessage {
-    YearValue(String),
-    SeasonFocus(bool),
-    SeasonValue(u8),
-    DayValue(String),
-}
 
 #[derive(Clone, PartialEq, Properties)]
 pub struct DateProperties {
     pub callback: Callback<Option<i32>>,
 }
 
-pub struct DateComponent {
-    year_value: Option<u16>,
+#[derive(Default, Clone, PartialEq)]
+struct DateState {
+    day: Option<u8>,
+    season: Option<u8>,
     season_focus: bool,
-    season_value: Option<u8>,
-    day_value: Option<u8>,
+    year: Option<u16>,
 }
 
-impl Component for DateComponent {
-    type Message = DateMessage;
-    type Properties = DateProperties;
-
-    fn create(_ctx: &Context<Self>) -> Self {
-        Self {
-            year_value: None,
-            season_focus: false,
-            season_value: None,
-            day_value: None,
+impl DateState {
+    fn computed_date(&self) -> Option<i32> {
+        match (self.year, self.season, self.day) {
+            (Some(y), Some(s), Some(d)) => {
+                Some(28 * 4 * (y as i32 - 1) + 28 * (s as i32 - 1) + d as i32)
+            }
+            _ => None,
         }
     }
+}
 
-    fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
-        match msg {
-            Self::Message::YearValue(year_string) => match year_string.parse::<u16>() {
-                Ok(year_int) => {
-                    if year_int > 0u16 {
-                        self.year_value = Some(year_int);
-                    } else {
-                        self.year_value = None;
-                    }
-                }
-                Err(_) => {
-                    self.year_value = None;
-                }
-            },
-            Self::Message::SeasonFocus(focus) => {
-                self.season_focus = focus;
-            }
-            Self::Message::SeasonValue(season) => {
-                if (1u8..=4u8).contains(&season) {
-                    self.season_value = Some(season);
-                } else {
-                    self.season_value = None;
-                }
-            }
-            Self::Message::DayValue(day_string) => match day_string.parse::<u8>() {
-                Ok(day_int) => {
-                    if (1u8..=28u8).contains(&day_int) {
-                        self.day_value = Some(day_int);
-                    } else {
-                        self.day_value = None;
-                    }
-                }
-                Err(_) => {
-                    self.day_value = None;
-                }
-            },
-        }
+enum DateAction {
+    DayInput(String),
+    SeasonFocus(bool),
+    SeasonSelect(u8),
+    YearInput(String),
+}
 
-        match (self.year_value, self.season_value, self.day_value) {
-            (Some(year), Some(season), Some(day)) => {
-                ctx.props().callback.emit(Some(
-                    28i32 * 4i32 * (year as i32 - 1i32)
-                        + 28i32 * (season as i32 - 1i32)
-                        + day as i32,
-                ));
+impl Reducible for DateState {
+    type Action = DateAction;
+
+    fn reduce(self: Rc<Self>, action: Self::Action) -> Rc<Self> {
+        let mut s = (*self).clone();
+        match action {
+            DateAction::DayInput(v) => {
+                s.day = v.parse::<u8>().ok().filter(|&d| (1u8..=28u8).contains(&d));
             }
-            _ => {
-                ctx.props().callback.emit(None);
+            DateAction::SeasonFocus(f) => s.season_focus = f,
+            DateAction::SeasonSelect(v) => {
+                s.season = (1u8..=4u8).contains(&v).then_some(v);
+            }
+            DateAction::YearInput(v) => {
+                s.year = v.parse::<u16>().ok().filter(|&y| y > 0);
             }
         }
+        Rc::new(s)
+    }
+}
 
-        true
+#[component]
+pub fn DateComponent(props: &DateProperties) -> Html {
+    let state = use_reducer(DateState::default);
+
+    {
+        let callback = props.callback.clone();
+        let computed = state.computed_date();
+        use_effect_with(computed, move |date| {
+            callback.emit(*date);
+        });
     }
 
-    fn view(&self, ctx: &Context<Self>) -> Html {
-        html! {
-            <div class="field has-addons">
-                <div class="control" style="flex: 1">
-                    <input class="input" type="text" placeholder="Day" value={ match self.day_value { Some(day) => day.to_string(), None => "".to_string() } } oninput={ ctx.link().callback(|event: InputEvent| Self::Message::DayValue(event.target_unchecked_into::<HtmlInputElement>().value())) } />
-                </div>
-                <div class={ if self.season_focus { "dropdown is-active" } else { "dropdown" } } style="flex: 1">
-                    <div class="control is-expanded">
-                        <div class="dropdown-trigger">
-                            <button class="button is-fullwidth is-justify-content-space-between" onfocus={ ctx.link().callback(|_| Self::Message::SeasonFocus(true)) } onblur={ ctx.link().callback(|_| Self::Message::SeasonFocus(false)) }>
-                                <span>{ match self.season_value { Some(value) => match value { 1u8 => "Spring".to_string(), 2u8 => "Summer".to_string(), 3u8 => "Fall".to_string(), 4u8 => "Winter".to_string(), _ => "ERROR".to_string() }, None => "Season".to_string() } }</span>
-                                <span class="material-symbols-outlined">{ "expand_more" }</span>
-                            </button>
-                        </div>
+    let dispatch = state.dispatcher();
+
+    let on_day_input = {
+        let dispatch = dispatch.clone();
+        Callback::from(move |e: InputEvent| {
+            let value = e.target_unchecked_into::<HtmlInputElement>().value();
+            dispatch.dispatch(DateAction::DayInput(value));
+        })
+    };
+
+    let on_season_focus = {
+        let dispatch = dispatch.clone();
+        Callback::from(move |_| dispatch.dispatch(DateAction::SeasonFocus(true)))
+    };
+    let on_season_blur = {
+        let dispatch = dispatch.clone();
+        Callback::from(move |_| dispatch.dispatch(DateAction::SeasonFocus(false)))
+    };
+
+    let make_season_select = {
+        let dispatch = dispatch.clone();
+        move |season: u8| {
+            let dispatch = dispatch.clone();
+            Callback::from(move |_| dispatch.dispatch(DateAction::SeasonSelect(season)))
+        }
+    };
+
+    let on_year_input = {
+        let dispatch = dispatch.clone();
+        Callback::from(move |e: InputEvent| {
+            let value = e.target_unchecked_into::<HtmlInputElement>().value();
+            dispatch.dispatch(DateAction::YearInput(value));
+        })
+    };
+
+    let season_label = match state.season {
+        Some(1) => "Spring",
+        Some(2) => "Summer",
+        Some(3) => "Fall",
+        Some(4) => "Winter",
+        _ => "Season",
+    };
+
+    let day_display = state.day.map(|d| d.to_string()).unwrap_or_default();
+    let year_display = state.year.map(|y| y.to_string()).unwrap_or_default();
+
+    html! {
+        <div class="field has-addons">
+            <div class="control" style="flex: 1">
+                <input class="input" type="text" placeholder="Day" value={day_display} oninput={on_day_input} />
+            </div>
+            <div class={ if state.season_focus { "dropdown is-active" } else { "dropdown" } } style="flex: 1">
+                <div class="control is-expanded">
+                    <div class="dropdown-trigger">
+                        <button class="button is-fullwidth is-justify-content-space-between" onfocus={on_season_focus} onblur={on_season_blur}>
+                            <span>{ season_label }</span>
+                            <span class="material-symbols-outlined">{ "expand_more" }</span>
+                        </button>
                     </div>
-                    <div class="dropdown-menu" style="width:100%">
-                        <div class="dropdown-content">
-                            <a class="dropdown-item" onmousedown={ ctx.link().callback(move |_| Self::Message::SeasonValue(1u8)) }>{ "Spring" }</a>
-                            <a class="dropdown-item" onmousedown={ ctx.link().callback(move |_| Self::Message::SeasonValue(2u8)) }>{ "Summer" }</a>
-                            <a class="dropdown-item" onmousedown={ ctx.link().callback(move |_| Self::Message::SeasonValue(3u8)) }>{ "Fall" }</a>
-                            <a class="dropdown-item" onmousedown={ ctx.link().callback(move |_| Self::Message::SeasonValue(4u8)) }>{ "Winter" }</a>
-                        </div>
-                    </div>
                 </div>
-                <div class="control" style="flex: 1">
-                    <input class="input" type="text" placeholder="Year" value={ match self.year_value { Some(year) => year.to_string(), None => "".to_string() } } oninput={ ctx.link().callback(|event: InputEvent| Self::Message::YearValue(event.target_unchecked_into::<HtmlInputElement>().value())) } />
+                <div class="dropdown-menu" style="width:100%">
+                    <div class="dropdown-content">
+                        <a class="dropdown-item" onmousedown={make_season_select(1)}>{ "Spring" }</a>
+                        <a class="dropdown-item" onmousedown={make_season_select(2)}>{ "Summer" }</a>
+                        <a class="dropdown-item" onmousedown={make_season_select(3)}>{ "Fall" }</a>
+                        <a class="dropdown-item" onmousedown={make_season_select(4)}>{ "Winter" }</a>
+                    </div>
                 </div>
             </div>
-        }
+            <div class="control" style="flex: 1">
+                <input class="input" type="text" placeholder="Year" value={year_display} oninput={on_year_input} />
+            </div>
+        </div>
     }
 }

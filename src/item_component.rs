@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use web_sys::HtmlInputElement;
 use yew::prelude::*;
 
@@ -17,23 +18,14 @@ macro_rules! icon_image {
     };
 }
 
-pub enum ItemMessage {
-    ItemFocus(bool),
-    ItemValue(String),
-    ItemIndex(u16),
-    PriceFocus(bool),
-    PriceValue(u16),
-    QuantityFocus(bool),
-    QuantityValue(u8),
-}
-
 #[derive(Clone, PartialEq, Properties)]
 pub struct ItemProperties {
     pub index: usize,
     pub callback: Callback<(usize, Option<Item>)>,
 }
 
-pub struct ItemComponent {
+#[derive(Default, Clone, PartialEq)]
+struct ItemState {
     item_focus: bool,
     item_value: String,
     item_index: Option<u16>,
@@ -43,151 +35,228 @@ pub struct ItemComponent {
     quantity_value: Option<u8>,
 }
 
-impl Component for ItemComponent {
-    type Message = ItemMessage;
-    type Properties = ItemProperties;
+enum ItemAction {
+    ItemFocus(bool),
+    ItemInput(String),
+    ItemSelect(u16),
+    PriceFocus(bool),
+    PriceSelect(u16),
+    QuantityFocus(bool),
+    QuantitySelect(u8),
+}
 
-    fn create(_ctx: &Context<Self>) -> Self {
-        Self {
-            item_focus: false,
-            item_value: "".to_string(),
-            item_index: None,
-            price_focus: false,
-            price_value: None,
-            quantity_focus: false,
-            quantity_value: None,
+impl Reducible for ItemState {
+    type Action = ItemAction;
+
+    fn reduce(self: Rc<Self>, action: Self::Action) -> Rc<Self> {
+        let mut s = (*self).clone();
+        match action {
+            ItemAction::ItemFocus(f) => s.item_focus = f,
+            ItemAction::ItemInput(v) => s.item_value = v,
+            ItemAction::ItemSelect(idx) => {
+                s.item_value = OBJECT_INFORMATION.get(&idx).unwrap().name.to_string();
+                s.item_index = Some(idx);
+                s.price_value = None;
+                s.quantity_value = None;
+            }
+            ItemAction::PriceFocus(f) => s.price_focus = f,
+            ItemAction::PriceSelect(v) => s.price_value = Some(v),
+            ItemAction::QuantityFocus(f) => s.quantity_focus = f,
+            ItemAction::QuantitySelect(v) => s.quantity_value = Some(v),
         }
+        Rc::new(s)
+    }
+}
+
+#[component]
+pub fn ItemComponent(props: &ItemProperties) -> Html {
+    let state = use_reducer(ItemState::default);
+
+    {
+        let callback = props.callback.clone();
+        let prop_index = props.index;
+        let deps = (state.item_index, state.price_value, state.quantity_value);
+        use_effect_with(deps, move |(item_index, price_value, quantity_value)| {
+            let item = match (*item_index, *price_value, *quantity_value) {
+                (Some(index), Some(price), Some(quantity)) => Some(Item {
+                    index,
+                    price,
+                    quantity,
+                }),
+                _ => None,
+            };
+            callback.emit((prop_index, item));
+        });
     }
 
-    fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
-        match msg {
-            Self::Message::ItemFocus(focus) => {
-                self.item_focus = focus;
-            }
-            Self::Message::ItemValue(value) => {
-                self.item_value = value;
-            }
-            Self::Message::ItemIndex(index) => {
-                self.item_value = OBJECT_INFORMATION.get(&index).unwrap().name.to_string();
-                self.item_index = Some(index);
-                self.price_value = None;
-                self.quantity_value = None;
-            }
-            Self::Message::PriceFocus(focus) => {
-                self.price_focus = focus;
-            }
-            Self::Message::PriceValue(value) => {
-                self.price_value = Some(value);
-            }
-            Self::Message::QuantityFocus(focus) => {
-                self.quantity_focus = focus;
-            }
-            Self::Message::QuantityValue(value) => {
-                self.quantity_value = Some(value);
-            }
-        }
+    let dispatch = state.dispatcher();
 
-        match (self.item_index, self.price_value, self.quantity_value) {
-            (Some(index), Some(price), Some(quantity)) => {
-                ctx.props().callback.emit((
-                    ctx.props().index,
-                    Some(Item {
-                        index,
-                        price,
-                        quantity,
-                    }),
-                ));
-            }
-            _ => {
-                ctx.props().callback.emit((ctx.props().index, None));
-            }
-        }
+    let on_item_focus = {
+        let dispatch = dispatch.clone();
+        Callback::from(move |_| dispatch.dispatch(ItemAction::ItemFocus(true)))
+    };
+    let on_item_blur = {
+        let dispatch = dispatch.clone();
+        Callback::from(move |_| dispatch.dispatch(ItemAction::ItemFocus(false)))
+    };
+    let on_item_input = {
+        let dispatch = dispatch.clone();
+        Callback::from(move |e: InputEvent| {
+            let value = e.target_unchecked_into::<HtmlInputElement>().value();
+            dispatch.dispatch(ItemAction::ItemInput(value));
+        })
+    };
 
-        true
-    }
+    let on_price_focus = {
+        let dispatch = dispatch.clone();
+        Callback::from(move |_| dispatch.dispatch(ItemAction::PriceFocus(true)))
+    };
+    let on_price_blur = {
+        let dispatch = dispatch.clone();
+        Callback::from(move |_| dispatch.dispatch(ItemAction::PriceFocus(false)))
+    };
 
-    fn view(&self, ctx: &Context<Self>) -> Html {
-        html! {
-            <div class="field has-addons">
-                <div class={ if self.item_focus { "dropdown is-active" } else { "dropdown" } } style="flex: 2">
-                    <div class="control">
-                        <button class="button is-static">
-                            { icon_image!(self.item_index) }
-                        </button>
-                    </div>
-                    <div class="control is-expanded">
-                        <div class="dropdown-trigger">
-                            <input class="input" type="text" placeholder="Item" value={ self.item_value.clone() } onfocus={ ctx.link().callback(|_| Self::Message::ItemFocus(true)) } onblur={ ctx.link().callback(|_| Self::Message::ItemFocus(false)) } oninput={ ctx.link().callback(|event: InputEvent| Self::Message::ItemValue(event.target_unchecked_into::<HtmlInputElement>().value())) } />
+    let on_quantity_focus = {
+        let dispatch = dispatch.clone();
+        Callback::from(move |_| dispatch.dispatch(ItemAction::QuantityFocus(true)))
+    };
+    let on_quantity_blur = {
+        let dispatch = dispatch.clone();
+        Callback::from(move |_| dispatch.dispatch(ItemAction::QuantityFocus(false)))
+    };
+
+    let item_dropdown_class = if state.item_focus { "dropdown is-active" } else { "dropdown" };
+    let price_dropdown_class = if state.item_index.is_some() && state.price_focus {
+        "dropdown is-active"
+    } else {
+        "dropdown"
+    };
+    let quantity_dropdown_class = if state.item_index.is_some() && state.quantity_focus {
+        "dropdown is-active"
+    } else {
+        "dropdown"
+    };
+
+    let price_label = match state.price_value {
+        Some(v) => format!("{}g", v),
+        None => "Price".to_string(),
+    };
+    let quantity_label = match state.quantity_value {
+        Some(v) => format!("x{}", v),
+        None => "Quantity".to_string(),
+    };
+
+    let filtered_items: Vec<Html> = OBJECT_INFORMATION_SORTED
+        .iter()
+        .filter_map(|index: &u16| {
+            let info: &ObjectInformation = OBJECT_INFORMATION.get(index).unwrap();
+            if info.name.to_lowercase().starts_with(&state.item_value.to_lowercase()) {
+                let dispatch = dispatch.clone();
+                Some(html! {
+                    <a class="dropdown-item" onmousedown={Callback::from(move |_| dispatch.dispatch(ItemAction::ItemSelect(*index)))}>
+                        <div class="columns is-vcentered">
+                            <div class="column is-narrow">
+                                { icon_image!(Some(*index)) }
+                            </div>
+                            <div class="column">
+                                { info.name }
+                            </div>
                         </div>
-                    </div>
-                    <div class="dropdown-menu" style="width:100%">
-                        <div class="dropdown-content">
-                            {
-                                OBJECT_INFORMATION_SORTED.iter().filter_map(|index: &u16| {
-                                    let object_information: &ObjectInformation = OBJECT_INFORMATION.get(index).unwrap();
-                                    if object_information.name.to_lowercase().starts_with(&self.item_value.to_lowercase()) {
-                                        Some(html! {
-                                            <a class="dropdown-item" onmousedown={ ctx.link().callback(|_| Self::Message::ItemIndex(*index)) }>
-                                                <div class="columns is-vcentered">
-                                                    <div class="column is-narrow">
-                                                        { icon_image!(Some(*index)) }
-                                                    </div>
-                                                    <div class="column">
-                                                        { object_information.name }
-                                                    </div>
-                                                </div>
-                                            </a>
-                                        })
-                                    } else {
-                                        None
-                                    }
-                                }).take(5).collect::<Html>()
-                            }
-                        </div>
+                    </a>
+                })
+            } else {
+                None
+            }
+        })
+        .take(5)
+        .collect();
+
+    let price_options: Html = match state.item_index {
+        Some(index) => {
+            let prices = possible_prices(index).unwrap();
+            prices
+                .into_iter()
+                .map(|price| {
+                    let dispatch = dispatch.clone();
+                    html! {
+                        <a class="dropdown-item" onmousedown={Callback::from(move |_| dispatch.dispatch(ItemAction::PriceSelect(price)))}>
+                            { format!("{}g", price) }
+                        </a>
+                    }
+                })
+                .collect()
+        }
+        None => html!(),
+    };
+
+    html! {
+        <div class="field has-addons">
+            <div class={item_dropdown_class} style="flex: 2">
+                <div class="control">
+                    <button class="button is-static">
+                        { icon_image!(state.item_index) }
+                    </button>
+                </div>
+                <div class="control is-expanded">
+                    <div class="dropdown-trigger">
+                        <input
+                            class="input"
+                            type="text"
+                            placeholder="Item"
+                            value={state.item_value.clone()}
+                            onfocus={on_item_focus}
+                            onblur={on_item_blur}
+                            oninput={on_item_input}
+                        />
                     </div>
                 </div>
-                <div class={ if self.item_index.is_some() && self.price_focus { "dropdown is-active" } else { "dropdown" } } style="flex: 1">
-                    <div class="control is-expanded">
-                        <div class="dropdown-trigger">
-                            <button class="button is-fullwidth is-justify-content-space-between" disabled={ self.item_index.is_none() } onfocus={ ctx.link().callback(|_| Self::Message::PriceFocus(true)) } onblur={ ctx.link().callback(|_| Self::Message::PriceFocus(false)) }>
-                                <span>{ match self.price_value { Some(value) => format!("{}g", value), None => "Price".to_string() } }</span>
-                                <span class="material-symbols-outlined">{ "expand_more" }</span>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="dropdown-menu" style="width:100%">
-                        <div class="dropdown-content">
-                            {
-                                match self.item_index {
-                                    Some(index) => {
-                                        let prices: Vec<u16> = possible_prices(index).unwrap();
-                                        prices.into_iter().map(|price: u16| {
-                                            html!(<a class="dropdown-item" onmousedown={ ctx.link().callback(move |_| Self::Message::PriceValue(price)) }>{ format!("{}g", price) }</a> )
-                                        }).collect::<Html>()
-                                    }
-                                    None => html!()
-                                }
-                            }
-                        </div>
-                    </div>
-                </div>
-                <div class={ if self.item_index.is_some() && self.quantity_focus { "dropdown is-active" } else { "dropdown" } } style="flex: 1">
-                    <div class="control is-expanded">
-                        <div class="dropdown-trigger">
-                            <button class="button is-fullwidth is-justify-content-space-between" disabled={ self.item_index.is_none() } onfocus={ ctx.link().callback(|_| Self::Message::QuantityFocus(true)) } onblur={ ctx.link().callback(|_| Self::Message::QuantityFocus(false)) }>
-                                <span>{ match self.quantity_value { Some(value) => format!("x{}", value), None => "Quantity".to_string() } }</span>
-                                <span class="material-symbols-outlined">{ "expand_more" }</span>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="dropdown-menu" style="width:100%">
-                        <div class="dropdown-content">
-                            <a class="dropdown-item" onmousedown={ ctx.link().callback(move |_| Self::Message::QuantityValue(1u8)) }>{ "x1" }</a>
-                            <a class="dropdown-item" onmousedown={ ctx.link().callback(move |_| Self::Message::QuantityValue(5u8)) }>{ "x5" }</a>
-                        </div>
+                <div class="dropdown-menu" style="width:100%">
+                    <div class="dropdown-content">
+                        { for filtered_items }
                     </div>
                 </div>
             </div>
-        }
+            <div class={price_dropdown_class} style="flex: 1">
+                <div class="control is-expanded">
+                    <div class="dropdown-trigger">
+                        <button
+                            class="button is-fullwidth is-justify-content-space-between"
+                            disabled={state.item_index.is_none()}
+                            onfocus={on_price_focus}
+                            onblur={on_price_blur}
+                        >
+                            <span>{ price_label }</span>
+                            <span class="material-symbols-outlined">{ "expand_more" }</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="dropdown-menu" style="width:100%">
+                    <div class="dropdown-content">
+                        { price_options }
+                    </div>
+                </div>
+            </div>
+            <div class={quantity_dropdown_class} style="flex: 1">
+                <div class="control is-expanded">
+                    <div class="dropdown-trigger">
+                        <button
+                            class="button is-fullwidth is-justify-content-space-between"
+                            disabled={state.item_index.is_none()}
+                            onfocus={on_quantity_focus}
+                            onblur={on_quantity_blur}
+                        >
+                            <span>{ quantity_label }</span>
+                            <span class="material-symbols-outlined">{ "expand_more" }</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="dropdown-menu" style="width:100%">
+                    <div class="dropdown-content">
+                        <a class="dropdown-item" onmousedown={{ let d = dispatch.clone(); Callback::from(move |_| d.dispatch(ItemAction::QuantitySelect(1u8))) }}>{ "x1" }</a>
+                        <a class="dropdown-item" onmousedown={{ let d = dispatch.clone(); Callback::from(move |_| d.dispatch(ItemAction::QuantitySelect(5u8))) }}>{ "x5" }</a>
+                    </div>
+                </div>
+            </div>
+        </div>
     }
 }

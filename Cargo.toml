@@ -8,8 +8,8 @@ anyhow = "1.0"
 phf = "0.11"
 serde = "1.0"
 web-sys = { version = "0.3", features = ["console", "Navigator", "Window"] }
-yew = { version = "0.20", features = ["csr"] }
-yew-agent = "0.2"
+yew = { version = "0.23", features = ["csr"] }
+yew-agent = "0.5"
 
 [build-dependencies]
 phf = { version = "0.11", features = ["macros"] }
