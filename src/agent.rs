@@ -2,16 +2,17 @@ use serde::{Deserialize, Serialize};
 use yew_agent::worker::{HandlerId, Worker, WorkerScope};
 
 use crate::traveling_merchant::TravelingMerchant;
+use crate::xxhash::shop_seed;
 
-pub const PROGRESS_INCREMENT: u64 = 2u64.pow(20u32);
-pub const PROGRESS_MAX: u64 = u32::MAX as u64 + 1u64;
+pub const PROGRESS_INCREMENT: u64 = 2u64.pow(20);
 
 #[derive(Serialize, Deserialize)]
 pub struct AgentStart {
-    pub start: u32,
-    pub add: u32,
-    pub date: i32,
+    pub start: u64,
+    pub stride: u32,
+    pub days_played: i32,
     pub merchant: TravelingMerchant,
+    pub max_k: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -23,8 +24,8 @@ pub enum AgentInput {
 #[derive(Serialize, Deserialize)]
 pub enum AgentOutput {
     Error(String),
-    SeedFound(i32),
-    SeedNotFound,
+    KFound(u64),
+    NotFound,
     Progress,
 }
 
@@ -50,36 +51,27 @@ impl Worker for Agent {
 
         let mut clear_start = false;
         if let Some(start) = &mut self.start {
-            for seed in (start.start..=u32::MAX)
-                .step_by(start.add as usize)
-                .take(PROGRESS_INCREMENT as usize)
-            {
-                match start.merchant.seed_valid(seed as i32) {
-                    Ok(seed_valid) => {
-                        if seed_valid {
-                            scope.respond(id, AgentOutput::SeedFound(seed as i32 - start.date));
-                            clear_start = true;
-                            break;
-                        }
-                    }
-                    Err(error) => {
-                        scope.respond(id, AgentOutput::Error(error.to_string()));
-                        clear_start = true;
-                        break;
-                    }
+            let mut k = start.start;
+            let mut count = 0u64;
+
+            while k <= start.max_k && count < PROGRESS_INCREMENT {
+                let seed = shop_seed(start.days_played, k * 2);
+                if start.merchant.seed_valid(seed) {
+                    scope.respond(id, AgentOutput::KFound(k));
+                    clear_start = true;
+                    break;
                 }
+                k += start.stride as u64;
+                count += 1;
             }
 
             if !clear_start {
-                match start.start.checked_add(start.add * PROGRESS_INCREMENT as u32) {
-                    Some(result) => {
-                        start.start = result;
-                        scope.respond(id, AgentOutput::Progress);
-                    }
-                    None => {
-                        scope.respond(id, AgentOutput::SeedNotFound);
-                        clear_start = true;
-                    }
+                if k > start.max_k {
+                    scope.respond(id, AgentOutput::NotFound);
+                    clear_start = true;
+                } else {
+                    start.start = k;
+                    scope.respond(id, AgentOutput::Progress);
                 }
             }
         }

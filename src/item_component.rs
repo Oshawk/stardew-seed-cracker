@@ -2,7 +2,7 @@ use std::rc::Rc;
 use web_sys::HtmlInputElement;
 use yew::prelude::*;
 
-use crate::codegen::{ObjectInformation, OBJECT_INFORMATION, OBJECT_INFORMATION_SORTED};
+use crate::codegen::{EligibleObject, ELIGIBLE_OBJECTS, ELIGIBLE_OBJECTS_SORTED};
 use crate::traveling_merchant::{possible_prices, Item};
 
 const ICON_SIZE: u16 = 16u16;
@@ -10,9 +10,9 @@ const ICONS_PER_ROW: u16 = 24u16;
 const ICONS_FILE: &str = "./assets/springobjects.png";
 
 macro_rules! icon_image {
-    ($index:expr) => {
-        match ($index) {
-            Some(index) => html!(<figure class={ format!("image is-{}x{}", ICON_SIZE, ICON_SIZE) } style={ format!("background: url({}) -{}px -{}px", ICONS_FILE, (index % ICONS_PER_ROW) * ICON_SIZE, (index / ICONS_PER_ROW) * ICON_SIZE) } />),
+    ($id:expr) => {
+        match ($id) {
+            Some(id) => html!(<figure class={ format!("image is-{}x{}", ICON_SIZE, ICON_SIZE) } style={ format!("background: url({}) -{}px -{}px", ICONS_FILE, (id % ICONS_PER_ROW) * ICON_SIZE, (id / ICONS_PER_ROW) * ICON_SIZE) } />),
             None => html!(<figure class={ format!("image is-{}x{}", ICON_SIZE, ICON_SIZE) } />)
         }
     };
@@ -28,7 +28,7 @@ pub struct ItemProperties {
 struct ItemState {
     item_focus: bool,
     item_value: String,
-    item_index: Option<u16>,
+    eligible_index: Option<u16>,
     price_focus: bool,
     price_value: Option<u16>,
     quantity_focus: bool,
@@ -38,7 +38,7 @@ struct ItemState {
 enum ItemAction {
     ItemFocus(bool),
     ItemInput(String),
-    ItemSelect(u16),
+    ItemSelect(u16), // eligible_index
     PriceFocus(bool),
     PriceSelect(u16),
     QuantityFocus(bool),
@@ -54,8 +54,8 @@ impl Reducible for ItemState {
             ItemAction::ItemFocus(f) => s.item_focus = f,
             ItemAction::ItemInput(v) => s.item_value = v,
             ItemAction::ItemSelect(idx) => {
-                s.item_value = OBJECT_INFORMATION.get(&idx).unwrap().name.to_string();
-                s.item_index = Some(idx);
+                s.item_value = ELIGIBLE_OBJECTS[idx as usize].name.to_string();
+                s.eligible_index = Some(idx);
                 s.price_value = None;
                 s.quantity_value = None;
             }
@@ -75,11 +75,11 @@ pub fn ItemComponent(props: &ItemProperties) -> Html {
     {
         let callback = props.callback.clone();
         let prop_index = props.index;
-        let deps = (state.item_index, state.price_value, state.quantity_value);
-        use_effect_with(deps, move |(item_index, price_value, quantity_value)| {
-            let item = match (*item_index, *price_value, *quantity_value) {
-                (Some(index), Some(price), Some(quantity)) => Some(Item {
-                    index,
+        let deps = (state.eligible_index, state.price_value, state.quantity_value);
+        use_effect_with(deps, move |(eligible_index, price_value, quantity_value)| {
+            let item = match (*eligible_index, *price_value, *quantity_value) {
+                (Some(eligible_index), Some(price), Some(quantity)) => Some(Item {
+                    eligible_index,
                     price,
                     quantity,
                 }),
@@ -126,12 +126,12 @@ pub fn ItemComponent(props: &ItemProperties) -> Html {
     };
 
     let item_dropdown_class = if state.item_focus { "dropdown is-active" } else { "dropdown" };
-    let price_dropdown_class = if state.item_index.is_some() && state.price_focus {
+    let price_dropdown_class = if state.eligible_index.is_some() && state.price_focus {
         "dropdown is-active"
     } else {
         "dropdown"
     };
-    let quantity_dropdown_class = if state.item_index.is_some() && state.quantity_focus {
+    let quantity_dropdown_class = if state.eligible_index.is_some() && state.quantity_focus {
         "dropdown is-active"
     } else {
         "dropdown"
@@ -146,17 +146,28 @@ pub fn ItemComponent(props: &ItemProperties) -> Html {
         None => "Quantity".to_string(),
     };
 
-    let filtered_items: Vec<Html> = OBJECT_INFORMATION_SORTED
+    // Get sprite ID for currently selected item
+    let sprite_id: Option<u16> = state
+        .eligible_index
+        .map(|idx| ELIGIBLE_OBJECTS[idx as usize].id);
+
+    let filtered_items: Vec<Html> = ELIGIBLE_OBJECTS_SORTED
         .iter()
-        .filter_map(|index: &u16| {
-            let info: &ObjectInformation = OBJECT_INFORMATION.get(index).unwrap();
-            if info.name.to_lowercase().starts_with(&state.item_value.to_lowercase()) {
+        .filter_map(|sorted_idx: &u16| {
+            let elig_idx = *sorted_idx;
+            let info: &EligibleObject = &ELIGIBLE_OBJECTS[elig_idx as usize];
+            if info
+                .name
+                .to_lowercase()
+                .starts_with(&state.item_value.to_lowercase())
+            {
                 let dispatch = dispatch.clone();
+                let obj_id = info.id;
                 Some(html! {
-                    <a class="dropdown-item" onmousedown={Callback::from(move |_| dispatch.dispatch(ItemAction::ItemSelect(*index)))}>
+                    <a class="dropdown-item" onmousedown={Callback::from(move |_| dispatch.dispatch(ItemAction::ItemSelect(elig_idx)))}>
                         <div class="columns is-vcentered">
                             <div class="column is-narrow">
-                                { icon_image!(Some(*index)) }
+                                { icon_image!(Some(obj_id)) }
                             </div>
                             <div class="column">
                                 { info.name }
@@ -171,9 +182,9 @@ pub fn ItemComponent(props: &ItemProperties) -> Html {
         .take(5)
         .collect();
 
-    let price_options: Html = match state.item_index {
-        Some(index) => {
-            let prices = possible_prices(index).unwrap();
+    let price_options: Html = match state.eligible_index {
+        Some(elig_idx) => {
+            let prices = possible_prices(elig_idx);
             prices
                 .into_iter()
                 .map(|price| {
@@ -194,7 +205,7 @@ pub fn ItemComponent(props: &ItemProperties) -> Html {
             <div class={item_dropdown_class} style="flex: 2">
                 <div class="control">
                     <button class="button is-static">
-                        { icon_image!(state.item_index) }
+                        { icon_image!(sprite_id) }
                     </button>
                 </div>
                 <div class="control is-expanded">
@@ -221,7 +232,7 @@ pub fn ItemComponent(props: &ItemProperties) -> Html {
                     <div class="dropdown-trigger">
                         <button
                             class="button is-fullwidth is-justify-content-space-between"
-                            disabled={state.item_index.is_none()}
+                            disabled={state.eligible_index.is_none()}
                             onfocus={on_price_focus}
                             onblur={on_price_blur}
                         >
@@ -241,7 +252,7 @@ pub fn ItemComponent(props: &ItemProperties) -> Html {
                     <div class="dropdown-trigger">
                         <button
                             class="button is-fullwidth is-justify-content-space-between"
-                            disabled={state.item_index.is_none()}
+                            disabled={state.eligible_index.is_none()}
                             onfocus={on_quantity_focus}
                             onblur={on_quantity_blur}
                         >

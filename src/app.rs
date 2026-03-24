@@ -5,17 +5,26 @@ use yew::prelude::*;
 use yew_agent::worker::WorkerBridge;
 use yew_agent::Spawnable;
 
-use crate::agent::{Agent, AgentInput, AgentOutput, AgentStart, PROGRESS_INCREMENT, PROGRESS_MAX};
-
+use crate::agent::{Agent, AgentInput, AgentOutput, AgentStart, PROGRESS_INCREMENT};
 use crate::date_component::DateComponent;
+use crate::disambiguation::{disambiguate, DisambiguationResult};
 use crate::item_component::ItemComponent;
 use crate::platform_component::PlatformComponent;
 use crate::traveling_merchant::{Item, Platform, TravelingMerchant, STOCK_QUANTITY};
 
+/// Seconds between Unix epoch (1970-01-01) and 2012-06-22.
+const EPOCH_TO_STARDEW: u64 = 1340323200;
+
+/// 48-hour buffer in seconds for timezone differences.
+const TIME_BUFFER: u64 = 172800;
+
 enum SeedStatus {
     NotRun,
     NotFound,
-    Found(i32),
+    Found {
+        k: u64,
+        disambiguation: Option<DisambiguationResult>,
+    },
 }
 
 pub enum Message {
@@ -33,7 +42,14 @@ pub struct App {
     workers: Vec<WorkerBridge<Agent>>,
     running: u8,
     progress: u64,
+    progress_max: u64,
     seed_status: SeedStatus,
+}
+
+fn compute_max_k() -> u64 {
+    let now_secs = (js_sys::Date::now() / 1000.0) as u64;
+    let max_uid = now_secs - EPOCH_TO_STARDEW + TIME_BUFFER;
+    max_uid / 2
 }
 
 impl Component for App {
@@ -60,10 +76,11 @@ impl Component for App {
         Self {
             platform: None,
             date: None,
-            stock: [None; 10usize],
+            stock: [None; STOCK_QUANTITY],
             workers,
             running: 0u8,
             progress: 0u64,
+            progress_max: 0u64,
             seed_status: SeedStatus::NotRun,
         }
     }
@@ -90,30 +107,33 @@ impl Component for App {
                     return false;
                 }
 
-                let merchant = TravelingMerchant {
-                    platform: self.platform.unwrap(),
-                    stock: [
-                        self.stock[0].unwrap(),
-                        self.stock[1].unwrap(),
-                        self.stock[2].unwrap(),
-                        self.stock[3].unwrap(),
-                        self.stock[4].unwrap(),
-                        self.stock[5].unwrap(),
-                        self.stock[6].unwrap(),
-                        self.stock[7].unwrap(),
-                        self.stock[8].unwrap(),
-                        self.stock[9].unwrap(),
-                    ],
-                };
+                let stock = [
+                    self.stock[0].unwrap(),
+                    self.stock[1].unwrap(),
+                    self.stock[2].unwrap(),
+                    self.stock[3].unwrap(),
+                    self.stock[4].unwrap(),
+                    self.stock[5].unwrap(),
+                    self.stock[6].unwrap(),
+                    self.stock[7].unwrap(),
+                    self.stock[8].unwrap(),
+                    self.stock[9].unwrap(),
+                ];
 
-                let add = self.workers.len() as u32;
+                let merchant = TravelingMerchant::new(self.platform.unwrap(), stock);
+                let days_played = self.date.unwrap();
+                let max_k = compute_max_k();
+                let stride = self.workers.len() as u32;
+
+                self.progress_max = max_k + 1;
 
                 for (index, worker) in self.workers.iter_mut().enumerate() {
                     worker.send(AgentInput::Start(AgentStart {
-                        start: index as u32,
-                        add,
-                        date: self.date.unwrap(),
+                        start: index as u64,
+                        stride,
+                        days_played,
                         merchant: merchant.clone(),
+                        max_k,
                     }));
                     self.running += 1u8;
                 }
@@ -128,17 +148,21 @@ impl Component for App {
                     console::log_2(&"Error:".into(), &error.into());
                     false
                 }
-                AgentOutput::SeedFound(seed) => {
+                AgentOutput::KFound(k) => {
                     self.running -= 1u8;
-                    self.progress = PROGRESS_MAX;
-                    self.seed_status = SeedStatus::Found(seed);
+                    self.progress = self.progress_max;
+
+                    let disambiguation =
+                        disambiguate(k, self.date.unwrap(), self.platform.unwrap());
+
+                    self.seed_status = SeedStatus::Found { k, disambiguation };
                     true
                 }
-                AgentOutput::SeedNotFound => {
+                AgentOutput::NotFound => {
                     self.running -= 1u8;
                     if self.running == 0u8 {
                         if matches!(self.seed_status, SeedStatus::NotRun) {
-                            self.progress = PROGRESS_MAX;
+                            self.progress = self.progress_max;
                             self.seed_status = SeedStatus::NotFound;
                         }
                         true
@@ -147,7 +171,7 @@ impl Component for App {
                     }
                 }
                 AgentOutput::Progress => {
-                    self.progress = min(self.progress + PROGRESS_INCREMENT, PROGRESS_MAX);
+                    self.progress = min(self.progress + PROGRESS_INCREMENT, self.progress_max);
                     match self.seed_status {
                         SeedStatus::NotRun => {
                             self.workers
@@ -183,18 +207,57 @@ impl Component for App {
                         <ItemComponent index={ index } callback={ ctx.link().callback(|(index, item)| Message::ItemUpdate(index, item)) }/>
                     }) }
                     <button class="button is-primary is-fullwidth mb-3" disabled={ !self.run_enabled() } onclick={ ctx.link().callback(|_| Message::Run) }>{ "Go" }</button>
-                    <progress class="progress is-primary" value={ self.progress.to_string() } max={ PROGRESS_MAX.to_string() }>{ format!("{}/{}", self.progress, PROGRESS_MAX) }</progress>
+                    <progress class="progress is-primary" value={ self.progress.to_string() } max={ self.progress_max.to_string() }>{ format!("{}/{}", self.progress, self.progress_max) }</progress>
                     {
-                        match self.seed_status {
+                        match &self.seed_status {
                             SeedStatus::NotRun => html!(),
                             SeedStatus::NotFound => html! {
                                 <h1 class="title has-text-centered">{ "Seed Not Found" }</h1>
                             },
-                            SeedStatus::Found(seed) => html! {
-                                <>
-                                    <h1 class="title has-text-centered">{ "Seed Found" }</h1>
-                                    <h2 class="subtitle has-text-centered">{ seed.to_string() }</h2>
-                                </>
+                            SeedStatus::Found { k, disambiguation } => {
+                                let uid_even = 2 * k;
+                                let uid_odd = 2 * k + 1;
+                                html! {
+                                    <>
+                                        <h1 class="title has-text-centered">{ "Success" }</h1>
+                                        <h2 class="subtitle has-text-centered">
+                                            {
+                                                match disambiguation {
+                                                    Some(d) => {
+                                                        html! {
+                                                            <>
+                                                                { format!(
+                                                                    "If there is a {} in stock on the {} of {} Year {}, the seed is {}.",
+                                                                    d.item_name,
+                                                                    ordinal(d.day_of_month),
+                                                                    d.season_name(),
+                                                                    d.year,
+                                                                    d.present_uid
+                                                                ) }
+                                                                <br />
+                                                                { format!(
+                                                                    "Othewise it is {}.",
+                                                                    d.absent_uid
+                                                                ) }
+                                                            </>
+                                                        }
+                                                    },
+                                                    None => {
+                                                        html!(
+                                                            <>
+                                                                { format!(
+                                                                    "Unable to disambiguate. The seed is either {} or {}.",
+                                                                    uid_even,
+                                                                    uid_odd
+                                                                ) }
+                                                            </>
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        </h2>
+                                    </>
+                                }
                             },
                         }
                     }
@@ -211,4 +274,17 @@ impl App {
             && self.stock.iter().all(|item| item.is_some())
             && self.running == 0u8
     }
+}
+
+fn ordinal(n: i32) -> String {
+    let suffix = match (n % 10, n % 100) {
+        (1, 11) => "th",
+        (2, 12) => "th",
+        (3, 13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{}{}", n, suffix)
 }

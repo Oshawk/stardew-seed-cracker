@@ -1,157 +1,150 @@
-use phf::phf_set;
-use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug)]
-struct ObjectInformation {
-    pub name: String,
-    pub price: u16,
-    pub edibility: i16,
-    pub type_and_category: String,
-    pub display_name: String,
-    pub description: String,
-}
-
-static OFF_LIMIT: phf::Set<u16> = phf_set!(
-    69u16, 73u16, 79u16, 91u16, 158u16, 159u16, 160u16, 161u16, 162u16, 163u16, 261u16, 277u16,
-    279u16, 289u16, 292u16, 305u16, 308u16, 326u16, 341u16, 413u16, 417u16, 437u16, 439u16, 447u16,
-    454u16, 460u16, 645u16, 680u16, 681u16, 682u16, 688u16, 689u16, 690u16, 774u16, 775u16, 797u16,
-    798u16, 799u16, 800u16, 801u16, 802u16, 803u16, 807u16, 812u16
-);
+use xxhash_rust::xxh32::xxh32;
 
 fn main() {
     let out_path: PathBuf = Path::new(&env::var("OUT_DIR").unwrap()).join("codegen.rs");
     let mut out_file: BufWriter<File> = BufWriter::new(File::create(&out_path).unwrap());
 
-    let object_information_path: &Path = Path::new("assets/ObjectInformation.json");
-    let object_information_file: File = File::open(&object_information_path).unwrap();
-    let object_information_json: serde_json::Value =
-        serde_json::from_reader(object_information_file).unwrap();
+    // Parse Objects.json (StardewXnbHack flat JSON format).
+    // serde_json with preserve_order reads keys in file order, which matches the game's
+    // C# Dictionary iteration order — critical for correct RNG key assignment.
+    let objects_file: File = File::open(Path::new("assets/Objects.json")).unwrap();
+    let objects_json: serde_json::Value = serde_json::from_reader(objects_file).unwrap();
+    let objects = objects_json.as_object().unwrap();
 
-    let mut object_information_map: HashMap<u16, ObjectInformation> = HashMap::new();
-    for (key, value) in object_information_json
-        .get("content")
-        .unwrap()
-        .as_object()
-        .unwrap()
-    {
-        let value_split: Vec<&str> = value.as_str().unwrap().split("/").collect();
-        object_information_map.insert(
-            key.parse::<u16>().unwrap(),
-            ObjectInformation {
-                name: value_split[0].to_string(),
-                price: value_split[1].parse::<u16>().unwrap(),
-                edibility: value_split[2].parse::<i16>().unwrap(),
-                type_and_category: value_split[3].to_string(),
-                display_name: value_split[4].to_string(),
-                description: value_split[5].to_string(),
-            },
-        );
-    }
+    let mut enumeration_entries: Vec<String> = Vec::new();
+    let mut eligible_objects: Vec<(u16, String, u16)> = Vec::new();
+    let mut eligible_index: u16 = 0;
+    let mut object_positions_builder = phf_codegen::Map::<u16>::new();
 
-    let mut object_information_builder: phf_codegen::Map<u16> = phf_codegen::Map::new();
-    for (key, value) in &object_information_map {
-        object_information_builder.entry(key.clone(), format!("{:?}", value).as_str());
-    }
+    for (pos, (key, value)) in objects.iter().enumerate() {
+        let name = value.get("Name").unwrap().as_str().unwrap();
+        let price = value.get("Price").unwrap().as_i64().unwrap() as i32;
+        let typ = value.get("Type").unwrap().as_str().unwrap();
+        let category = value.get("Category").unwrap().as_i64().unwrap() as i32;
+        let exclude = value
+            .get("ExcludeFromRandomSale")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
-    let object_information_sorted: Vec<u16> = {
-        let mut object_information_vec: Vec<(&u16, &ObjectInformation)> =
-            object_information_map.iter().collect();
-        object_information_vec
-            .sort_by_key(|(index, object_information)| (&object_information.name, *index));
-        object_information_vec
-            .into_iter()
-            .map(|(index, _object_information)| *index)
-            .collect()
-    };
-
-    let mut first_filter_set: HashSet<u16> = HashSet::new();
-    for index in 0u16..790u16 {
-        if !object_information_map.contains_key(&index) || OFF_LIMIT.contains(&index) {
-            first_filter_set.insert(index);
+        // RANDOM_ITEMS filter: numeric key in [2, 789], not excluded, price > 0.
+        // Non-numeric keys (e.g. "MossSoup") still consume an RNG call in the game's
+        // LINQ shuffle but are filtered out by int.TryParse, so they must remain in
+        // the enumeration as Ineligible.
+        let id = key.parse::<u16>().ok();
+        let passes_random_items =
+            id.is_some_and(|id| id >= 2 && id <= 789) && !exclude && price > 0;
+        if !passes_random_items {
+            enumeration_entries.push("EnumerationEntry { class: ObjectClass::Ineligible }".into());
+            continue;
         }
-    }
+        let id = id.unwrap();
 
-    let mut first_filter_builder: phf_codegen::Set<u16> = phf_codegen::Set::new();
-    for index in &first_filter_set {
-        first_filter_builder.entry(index.clone());
-    }
-
-    let mut second_filter_set: HashSet<u16> = HashSet::new();
-    for index in 0u16..790u16 {
-        if !first_filter_set.contains(&index) {
-            let value: &ObjectInformation = object_information_map.get(&index).unwrap();
-            if !value.type_and_category.contains("-")
-                || value.price <= 0
-                || value.type_and_category.contains("-13")
-                || value.type_and_category == "Quest"
-                || value.name == "Weeds"
-                || value.type_and_category.contains("Minerals")
-                || value.type_and_category.contains("Arch")
-            {
-                second_filter_set.insert(index);
-            }
-        }
-    }
-
-    let mut second_filter_builder: phf_codegen::Set<u16> = phf_codegen::Set::new();
-    for index in &second_filter_set {
-        second_filter_builder.entry(index.clone());
-    }
-
-    // Pretty sure this is wrong.
-    let mut fast_exclude_map: HashMap<u16, u16> = HashMap::new();
-    for index in 0u16..790u16 {
-        let mut value: u16 = index.clone();
-        loop {
-            value += 1u16;
-            value %= 790u16;
-
-            if !first_filter_set.contains(&value) && !second_filter_set.contains(&value) {
-                break;
-            }
+        // Layer 2 (PerItemCondition): Category < 0, Category != -999, Type not Quest/Minerals/Arch
+        let passes_condition = category < 0
+            && category != -999
+            && typ != "Quest"
+            && typ != "Minerals"
+            && typ != "Arch";
+        if !passes_condition {
+            enumeration_entries.push("EnumerationEntry { class: ObjectClass::Intermediate }".into());
+            continue;
         }
 
-        fast_exclude_map.insert(index, value);
+        // Fully eligible for the Traveling Cart
+        enumeration_entries.push(format!(
+            "EnumerationEntry {{ class: ObjectClass::FullyEligible({}) }}",
+            eligible_index
+        ));
+        object_positions_builder.entry(id, &format!("{}u16", pos));
+        eligible_objects.push((id, name.to_string(), price as u16));
+        eligible_index += 1;
     }
 
-    let mut fast_exclude_builder: phf_codegen::Map<u16> = phf_codegen::Map::new();
-    for (key, value) in &fast_exclude_map {
-        fast_exclude_builder.entry(key.clone(), format!("{:?}", value).as_str());
+    // --- Write generated code ---
+
+    // OBJECT_ENUMERATION: one entry per object in dictionary order
+    writeln!(
+        &mut out_file,
+        "pub static OBJECT_ENUMERATION: [EnumerationEntry; {}] = [",
+        enumeration_entries.len()
+    )
+    .unwrap();
+    for entry in &enumeration_entries {
+        writeln!(&mut out_file, "    {},", entry).unwrap();
+    }
+    writeln!(&mut out_file, "];").unwrap();
+
+    // ELIGIBLE_OBJECTS: fully-eligible items in dictionary order
+    writeln!(
+        &mut out_file,
+        "pub static ELIGIBLE_OBJECTS: [EligibleObject; {}] = [",
+        eligible_objects.len()
+    )
+    .unwrap();
+    for (id, name, price) in &eligible_objects {
+        writeln!(
+            &mut out_file,
+            "    EligibleObject {{ id: {}, name: {:?}, price: {} }},",
+            id, name, price
+        )
+        .unwrap();
+    }
+    writeln!(&mut out_file, "];").unwrap();
+
+    // ELIGIBLE_OBJECTS_SORTED: indices into ELIGIBLE_OBJECTS, sorted by (name, id)
+    let mut sorted_indices: Vec<u16> = (0..eligible_objects.len() as u16).collect();
+    sorted_indices.sort_by_key(|&idx| {
+        let (id, ref name, _) = eligible_objects[idx as usize];
+        (name.clone(), id)
+    });
+    writeln!(
+        &mut out_file,
+        "pub static ELIGIBLE_OBJECTS_SORTED: [u16; {}] = {:?};",
+        sorted_indices.len(),
+        sorted_indices
+    )
+    .unwrap();
+
+    // OBJECT_POSITIONS: object ID -> enumeration position (PHF map)
+    writeln!(
+        &mut out_file,
+        "pub static OBJECT_POSITIONS: phf::Map<u16, u16> = {};",
+        object_positions_builder.build()
+    )
+    .unwrap();
+
+    // SYNCED_RANDOM key hashes
+    let synced_keys = [
+        ("HASH_CART_FEZ", "cart_fez"),
+        ("HASH_CART_COFFEE_BEAN", "cart_coffee_bean"),
+        ("HASH_CART_RARECROW", "cart_rarecrow"),
+        ("HASH_CART_RETRO_CATALOGUE", "cart_retroCatalogue"),
+        ("HASH_TRAVELER_SKILL_BOOK", "travelerSkillBook"),
+        ("HASH_TEASET", "teaset"),
+        ("HASH_CART_JOJA_CATALOGUE", "cart_jojaCatalogue"),
+        ("HASH_CART_JUNIMO_CATALOGUE", "cart_junimoCatalogue"),
+    ];
+    for (const_name, key_str) in &synced_keys {
+        let hash = xxh32(key_str.as_bytes(), 0) as i32;
+        writeln!(&mut out_file, "pub const {}: i32 = {}i32;", const_name, hash).unwrap();
     }
 
+    // Constants
     writeln!(
         &mut out_file,
-        "pub static OBJECT_INFORMATION: phf::Map<u16, ObjectInformation> = {};",
-        object_information_builder.build()
+        "pub const TOTAL_OBJECTS: usize = {};",
+        enumeration_entries.len()
     )
     .unwrap();
     writeln!(
         &mut out_file,
-        "pub static OBJECT_INFORMATION_SORTED: [u16; {}] = {:?};",
-        object_information_sorted.len(),
-        object_information_sorted
-    )
-    .unwrap();
-    writeln!(
-        &mut out_file,
-        "pub static FIRST_FILTER: phf::Set<u16> = {};",
-        first_filter_builder.build()
-    )
-    .unwrap();
-    writeln!(
-        &mut out_file,
-        "pub static SECOND_FILTER: phf::Set<u16> = {};",
-        second_filter_builder.build()
-    )
-    .unwrap();
-    writeln!(
-        &mut out_file,
-        "pub static FAST_EXCLUDE: phf::Map<u16, u16> = {};",
-        fast_exclude_builder.build()
+        "pub const TOTAL_ELIGIBLE: usize = {};",
+        eligible_objects.len()
     )
     .unwrap();
 }

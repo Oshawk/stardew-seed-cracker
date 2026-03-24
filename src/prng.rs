@@ -1,16 +1,24 @@
 use std::num::Wrapping;
 use std::ops::Range;
 
-use anyhow::{bail, Result};
-
 use crate::traveling_merchant::Platform;
 
 pub trait Prng {
-    fn from_seed(seed: i32) -> Result<Self>
+    fn from_seed(seed: i32) -> Self
     where
         Self: Sized;
-    fn gen_range(&mut self, range: Range<i32>) -> Result<i32>;
-    fn gen_float(&mut self) -> Result<f64>;
+
+    /// C#'s `Next()` — returns a non-negative i32.
+    fn next(&mut self) -> i32;
+
+    /// C#'s `Next(maxValue)` — returns a value in [0, max).
+    fn next_max(&mut self, max: i32) -> i32;
+
+    /// C#'s `Next(minValue, maxValue)` — returns a value in [min, max).
+    fn next_min_max(&mut self, range: Range<i32>) -> i32;
+
+    /// C#'s `NextDouble()` — returns a double in [0, 1).
+    fn next_double(&mut self) -> f64;
 }
 
 pub struct Jkiss {
@@ -37,37 +45,50 @@ impl Jkiss {
     }
 }
 
-// Very similar to:
+// Identical to:
 // https://github.com/mono/mono/commit/8d3c6d44f8388897fd4d53e819637bf5ee82cfed#diff-69d4dc59d30a768318a79c254ef6d6041cc591deb6439355402317e23b1da5ad
-// The only difference seems to be how x is initially assigned.
 impl Prng for Jkiss {
-    fn from_seed(seed: i32) -> Result<Self> {
-        Ok(Jkiss {
-            x: Wrapping(314527869u32) * Wrapping(seed as u32) + Wrapping(1234567u32),
+    fn from_seed(seed: i32) -> Self {
+        Jkiss {
+            x: Wrapping(seed as u32),
             y: Wrapping(987654321u32),
             z: Wrapping(43219876u32),
             c: Wrapping(6543217u32),
-        })
+        }
     }
 
-    fn gen_range(&mut self, range: Range<i32>) -> Result<i32> {
-        if range.is_empty() {
-            bail!("Empty range parsed to Jkiss.gen_range().");
+    fn next(&mut self) -> i32 {
+        loop {
+            let random = self.gen() as i32;
+            if random == i32::MIN {
+                continue;
+            }
+            let mask = random >> 31;
+            return (random ^ mask) + (mask & 1);
         }
+    }
 
+    fn next_max(&mut self, max: i32) -> i32 {
+        if max <= 0 {
+            return 0;
+        }
+        (self.gen() % max as u32) as i32
+    }
+
+    fn next_min_max(&mut self, range: Range<i32>) -> i32 {
         let difference: u32 = (Wrapping(range.end) - Wrapping(range.start)).0 as u32;
-        if difference == 1u32 {
-            Ok(range.start)
+        if difference <= 1 {
+            range.start
         } else {
-            Ok((Wrapping(range.start) + Wrapping((self.gen() % difference) as i32)).0)
+            (Wrapping(range.start) + Wrapping((self.gen() % difference) as i32)).0
         }
     }
 
-    fn gen_float(&mut self) -> Result<f64> {
+    fn next_double(&mut self) -> f64 {
         let a: f64 = (self.gen() >> 6) as f64;
-        let b: f64 = (self.gen() >> 6) as f64;
+        let b: f64 = (self.gen() >> 5) as f64;
 
-        Ok((a * 134217728f64 + b) / 9007199254740992f64)
+        (a * 134217728f64 + b) / 9007199254740992f64
     }
 }
 
@@ -107,7 +128,7 @@ impl MsCorLibRandom {
 }
 
 impl Prng for MsCorLibRandom {
-    fn from_seed(seed: i32) -> Result<Self> {
+    fn from_seed(seed: i32) -> Self {
         let mut s: Self = Self {
             seed: [0i32; 56usize],
             n: 0usize,
@@ -126,7 +147,7 @@ impl Prng for MsCorLibRandom {
         for i in 1usize..55usize {
             let ii: usize = (21usize * i) % 55usize;
             s.seed[ii] = mk;
-            mk = mj - mk;
+            mk = mj.wrapping_sub(mk);
             if mk < 0i32 {
                 mk += i32::MAX;
             }
@@ -135,24 +156,31 @@ impl Prng for MsCorLibRandom {
 
         for _ in 1usize..5usize {
             for i in 1usize..56usize {
-                s.seed[i] -= s.seed[1usize + (i + 30usize) % 55usize];
+                s.seed[i] = s.seed[i].wrapping_sub(s.seed[1usize + (i + 30usize) % 55usize]);
+                if s.seed[i] == i32::MAX {
+                    s.seed[i] -= 1i32;
+                }
                 if s.seed[i] < 0i32 {
                     s.seed[i] += i32::MAX;
                 }
             }
         }
 
-        Ok(s)
+        s
     }
 
-    fn gen_range(&mut self, range: Range<i32>) -> Result<i32> {
-        if range.is_empty() {
-            bail!("Empty range parsed to MsCorLibRandom.gen_range().");
-        }
+    fn next(&mut self) -> i32 {
+        self.gen()
+    }
 
+    fn next_max(&mut self, max: i32) -> i32 {
+        (self.next_double() * max as f64) as i32
+    }
+
+    fn next_min_max(&mut self, range: Range<i32>) -> i32 {
         let difference: u32 = (Wrapping(range.end) - Wrapping(range.start)).0 as u32;
         if difference <= i32::MAX as u32 {
-            Ok(range.start + (self.gen_float()? * difference as f64) as i32)
+            range.start + (self.next_double() * difference as f64) as i32
         } else {
             let mut sample: i32 = self.gen();
             if self.gen() % 2i32 == 0i32 {
@@ -163,18 +191,18 @@ impl Prng for MsCorLibRandom {
             sample += (i32::MAX - 1i32) as f64;
             sample /= ((2u32 * i32::MAX as u32) - 1u32) as f64;
 
-            Ok((Wrapping(range.start) + Wrapping((sample * difference as f64) as u32 as i32)).0)
+            (Wrapping(range.start) + Wrapping((sample * difference as f64) as u32 as i32)).0
         }
     }
 
-    fn gen_float(&mut self) -> Result<f64> {
-        Ok(self.gen() as f64 * (1f64 / i32::MAX as f64))
+    fn next_double(&mut self) -> f64 {
+        self.gen() as f64 * (1f64 / i32::MAX as f64)
     }
 }
 
-pub fn get_prng(platform: Platform, seed: i32) -> Result<Box<dyn Prng>> {
-    Ok(match platform {
-        Platform::Switch => Box::new(Jkiss::from_seed(seed)?),
-        Platform::PC => Box::new(MsCorLibRandom::from_seed(seed)?),
-    })
+pub fn get_prng(platform: Platform, seed: i32) -> Box<dyn Prng> {
+    match platform {
+        Platform::Switch => Box::new(Jkiss::from_seed(seed)),
+        Platform::PC => Box::new(MsCorLibRandom::from_seed(seed)),
+    }
 }

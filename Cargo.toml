@@ -6,7 +6,11 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 phf = "0.11"
-serde = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+xxhash-rust = { version = "0.8", features = ["xxh32"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
 web-sys = { version = "0.3", features = ["console", "Navigator", "Window"] }
 yew = { version = "0.23", features = ["csr"] }
 yew-agent = "0.5"
@@ -14,7 +18,9 @@ yew-agent = "0.5"
 [build-dependencies]
 phf = { version = "0.11", features = ["macros"] }
 phf_codegen = "0.11"
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["preserve_order"] }
+xxhash-rust = { version = "0.8", features = ["xxh32"] }
 
 [profile.release]
 lto = true
+

@@ -1,14 +1,57 @@
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use std::cmp::max;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
+
+use serde::{Deserialize, Serialize};
 
 use crate::codegen::{
-    ObjectInformation, FAST_EXCLUDE, FIRST_FILTER, OBJECT_INFORMATION, SECOND_FILTER,
+    ObjectClass, ELIGIBLE_OBJECTS, OBJECT_ENUMERATION, TOTAL_ELIGIBLE, TOTAL_OBJECTS,
 };
 use crate::prng::{get_prng, Prng};
 
-pub const STOCK_QUANTITY: usize = 10usize;
+pub struct GeneratedStock {
+    pub items: [GeneratedItem; STOCK_QUANTITY],
+}
+
+pub struct GeneratedItem {
+    pub eligible_index: u16,
+    pub price: u16,
+    pub quantity: u8,
+}
+
+/// Forward-simulate the travelling cart stock for a given platform and shop seed.
+pub fn generate_stock(platform: Platform, seed: i32) -> GeneratedStock {
+    let mut prng = get_prng(platform, seed);
+
+    // Phase A: assign a Next() key to every eligible object, take the 10 smallest.
+    let mut keyed: Vec<(i32, u16)> = Vec::with_capacity(TOTAL_ELIGIBLE);
+    for pos in 0..TOTAL_OBJECTS {
+        let key = prng.next();
+        if let ObjectClass::FullyEligible(idx) = OBJECT_ENUMERATION[pos].class {
+            keyed.push((key, idx));
+        }
+    }
+    keyed.sort_by_key(|&(key, _)| key);
+
+    // Phase B: price and quantity rolls, one per slot in sort-key (= UI slot) order.
+    let items = std::array::from_fn(|slot| {
+        let set_idx = prng.next_max(10);
+        let mult_idx = prng.next_max(3);
+        let qty_roll = prng.next_double();
+
+        let elig_idx = keyed[slot].1;
+        let base_price = ELIGIBLE_OBJECTS[elig_idx as usize].price;
+        let set_price = (set_idx as u16 + 1) * 100;
+        let multiplied = base_price * [3u16, 4u16, 5u16][mult_idx as usize];
+        let price = max(set_price, multiplied);
+        let quantity = if qty_roll < 0.1 { 5 } else { 1 };
+
+        GeneratedItem { eligible_index: elig_idx, price, quantity }
+    });
+
+    GeneratedStock { items }
+}
+
+pub const STOCK_QUANTITY: usize = 10;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum Platform {
@@ -18,7 +61,7 @@ pub enum Platform {
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct Item {
-    pub index: u16,
+    pub eligible_index: u16,
     pub price: u16,
     pub quantity: u8,
 }
@@ -27,117 +70,125 @@ pub struct Item {
 pub struct TravelingMerchant {
     pub platform: Platform,
     pub stock: [Item; STOCK_QUANTITY],
+    /// Pre-computed: observed_slots[eligible_index] = Some(ui_slot) if this item is in the stock.
+    pub observed_slots: Vec<Option<u8>>,
 }
 
 impl TravelingMerchant {
-    pub fn seed_valid(&self, seed: i32) -> Result<bool> {
-        let mut prng: Box<dyn Prng> = get_prng(self.platform, seed)?;
+    pub fn new(platform: Platform, stock: [Item; STOCK_QUANTITY]) -> Self {
+        let mut observed_slots: Vec<Option<u8>> = vec![None; TOTAL_ELIGIBLE];
+        for (slot, item) in stock.iter().enumerate() {
+            observed_slots[item.eligible_index as usize] = Some(slot as u8);
+        }
+        Self {
+            platform,
+            stock,
+            observed_slots,
+        }
+    }
 
-        let mut used_indexes: HashSet<u16> = HashSet::new();
+    pub fn seed_valid(&self, seed: i32) -> bool {
+        let mut prng: Box<dyn Prng> = get_prng(self.platform, seed);
 
-        for item in self.stock.iter() {
-            let mut index = prng.gen_range(2i32..790i32)? as u16;
+        // Phase A: Object shuffle with early rejection (807 next() calls)
+        let mut min_non_obs_eligible_key: i32 = i32::MAX;
+        let mut obs_keys: [i32; STOCK_QUANTITY] = [0; STOCK_QUANTITY];
+        let mut obs_seen: [bool; STOCK_QUANTITY] = [false; STOCK_QUANTITY];
+        let mut obs_count: u8 = 0;
+        let mut max_obs_key: i32 = 0;
 
-            let mut fast_exclude_index = index;
-            loop {
-                fast_exclude_index = *FAST_EXCLUDE
-                    .get(&fast_exclude_index)
-                    .context("Issue with fast exclude.")?;
-                if !used_indexes.contains(&fast_exclude_index) {
-                    break;
-                }
-            }
+        for pos in 0..TOTAL_OBJECTS {
+            let key = prng.next();
+            match OBJECT_ENUMERATION[pos].class {
+                ObjectClass::FullyEligible(elig_idx) => {
+                    if let Some(slot) = self.observed_slots[elig_idx as usize] {
+                        let s = slot as usize;
 
-            if fast_exclude_index != item.index {
-                return Ok(false);
-            }
-
-            loop {
-                index += 1u16;
-                index %= 790u16;
-
-                if FIRST_FILTER.contains(&index) {
-                    continue;
-                }
-
-                let constant_multiplier: u16;
-                let variable_multiplier: u16;
-                let quantity_decider: f64;
-                match self.platform {
-                    Platform::PC => {
-                        if SECOND_FILTER.contains(&index) {
-                            continue;
+                        // Check against non-observed items
+                        if min_non_obs_eligible_key < key {
+                            return false;
                         }
 
-                        constant_multiplier = prng.gen_range(1i32..11i32)? as u16;
-                        variable_multiplier = prng.gen_range(3i32..6i32)? as u16;
-                        quantity_decider = prng.gen_float()?;
-                    }
-                    Platform::Switch => {
-                        // Switch edition moves these before the checks.
-                        constant_multiplier = prng.gen_range(1i32..11i32)? as u16;
-                        variable_multiplier = prng.gen_range(3i32..6i32)? as u16;
-                        quantity_decider = prng.gen_float()?;
+                        // Check ordering against previously-seen observed items
+                        for t in 0..STOCK_QUANTITY {
+                            if obs_seen[t] {
+                                if t < s && obs_keys[t] > key {
+                                    return false; // earlier UI slot has larger key
+                                }
+                                if t > s && obs_keys[t] < key {
+                                    return false; // later UI slot has smaller key
+                                }
+                            }
+                        }
 
-                        if SECOND_FILTER.contains(&index) {
-                            continue;
+                        obs_keys[s] = key;
+                        obs_seen[s] = true;
+                        obs_count += 1;
+                        if key > max_obs_key {
+                            max_obs_key = key;
+                        }
+                    } else {
+                        // Non-observed fully eligible item
+                        if key < min_non_obs_eligible_key {
+                            min_non_obs_eligible_key = key;
+                        }
+                        if key < max_obs_key {
+                            return false;
                         }
                     }
                 }
-
-                if !used_indexes.insert(index) {
-                    continue;
+                ObjectClass::Intermediate | ObjectClass::Ineligible => {
+                    // Just advance RNG, no checks needed
                 }
-
-                let quantity = if quantity_decider < 0.1f64 { 5u8 } else { 1u8 };
-
-                if quantity != item.quantity {
-                    return Ok(false);
-                }
-
-                let object_information: &ObjectInformation = OBJECT_INFORMATION
-                    .get(&index)
-                    .context("Issue with object information.")?;
-
-                let price: u16 = max(
-                    100u16 * constant_multiplier,
-                    object_information.price * variable_multiplier,
-                );
-
-                if price != item.price {
-                    return Ok(false);
-                }
-
-                break;
             }
         }
 
-        Ok(true)
+        // Verify all 10 observed items were encountered
+        if obs_count != STOCK_QUANTITY as u8 {
+            return false;
+        }
+
+        // Final check: no non-observed eligible item beat the largest observed key
+        // (already checked incrementally, but verify min_non_obs > max_obs)
+        if min_non_obs_eligible_key < max_obs_key {
+            return false;
+        }
+
+        // Phase B: Price and quantity verification (10 items x 3 RNG calls)
+        // Items are processed in sort-key order (ascending), which matches UI slot order 0..9
+        for slot in 0..STOCK_QUANTITY {
+            let set_idx = prng.next_max(10);
+            let mult_idx = prng.next_max(3);
+            let qty_roll = prng.next_double();
+
+            let item = &self.stock[slot];
+            let base_price = ELIGIBLE_OBJECTS[item.eligible_index as usize].price;
+
+            let set_price = (set_idx as u16 + 1) * 100; // [100, 200, ..., 1000]
+            let multiplied = base_price * [3u16, 4u16, 5u16][mult_idx as usize];
+            let expected_price = max(set_price, multiplied);
+            let expected_qty: u8 = if qty_roll < 0.1 { 5 } else { 1 };
+
+            if expected_price != item.price || expected_qty != item.quantity {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
-pub fn possible_prices(item_index: u16) -> Result<Vec<u16>> {
-    let object_information: &ObjectInformation = OBJECT_INFORMATION
-        .get(&item_index)
-        .context("Issue with object information.")?;
-    let minimum: u16 = max(100u16 * 1u16, object_information.price * 3u16);
-    let mut prices: Vec<u16> = Vec::new();
+pub fn possible_prices(eligible_index: u16) -> Vec<u16> {
+    let base_price = ELIGIBLE_OBJECTS[eligible_index as usize].price;
+    let mut prices: BTreeSet<u16> = BTreeSet::new();
 
-    for constant_multiplier in 1u16..11u16 {
-        let price: u16 = 100u16 * constant_multiplier;
-        if price >= minimum && !prices.contains(&price) {
-            prices.push(price)
+    for set_idx in 0..10u16 {
+        for mult_idx in 0..3usize {
+            let set_price = (set_idx + 1) * 100;
+            let multiplied = base_price * [3u16, 4u16, 5u16][mult_idx];
+            prices.insert(max(set_price, multiplied));
         }
     }
 
-    for variable_multiplier in 3u16..6u16 {
-        let price: u16 = object_information.price * variable_multiplier;
-        if price >= minimum && !prices.contains(&price) {
-            prices.push(price)
-        }
-    }
-
-    prices.sort();
-
-    Ok(prices)
+    prices.into_iter().collect()
 }
