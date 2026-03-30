@@ -11,6 +11,7 @@ More (hopefully) to come.
 
 ## Supported Versions
 
+- 1.6.15
 - 1.5.6
 
 Version 1.6 to come (probably when released on Switch).
@@ -19,5 +20,4 @@ Version 1.6 to come (probably when released on Switch).
 
 Stardew Seed Cracker's code is licenced under MIT.
 
-The sprites and data located in the `assets` directory were extracted from Stardew Valley using [xnbcli](https://github.com/LeonBlade/xnbcli). Their copyright is held by ConcernedApe.
-
+The sprites and data located in the `assets` directory were extracted from Stardew Valley using [StardewXnbHack](https://github.com/Pathoschild/StardewXnbHack). Their copyright is held by ConcernedApe.
