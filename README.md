@@ -14,8 +14,6 @@ More (hopefully) to come.
 - 1.6.15
 - 1.5.6
 
-Version 1.6 to come (probably when released on Switch).
-
 ## Licences
 
 Stardew Seed Cracker's code is licenced under MIT.
