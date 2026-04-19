@@ -86,7 +86,7 @@ pub fn disambiguate(
     // Search up to 10 years of future merchant visits
     let max_days = current_days_played + 28 * 4 * 10;
 
-    let mut days_played = current_days_played + 1;
+    let mut days_played = current_days_played;
     while days_played <= max_days {
         let day_of_month = ((days_played - 1) % 28) + 1;
 
